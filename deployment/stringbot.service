@@ -9,9 +9,6 @@ EnvironmentFile=/home/ubuntu/TeleSessionBot/.env
 ExecStart=/home/ubuntu/TeleSessionBot/venv/bin/python3 /home/ubuntu/TeleSessionBot/bot.py
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=sessionbot
 
 [Install]
 WantedBy=multi-user.target
