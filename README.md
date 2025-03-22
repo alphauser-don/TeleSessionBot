@@ -13,7 +13,7 @@ A secure Telegram bot for generating and managing Telethon string sessions.
 ## Deployment
 1. Clone repo:
 ```bash
-git clone https://github.com/yourusername/TeleSessionBot.git
+git clone https://github.com/alphauser-don/TeleSessionBot.git
 cd TeleSessionBot
 
 2 - Install dependencies:
