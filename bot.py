@@ -3,7 +3,6 @@ import json
 import time
 import asyncio
 import psutil
-import socket
 from datetime import datetime
 from telegram import Update
 from telegram.ext import (
@@ -130,10 +129,7 @@ async def phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         app_version="SessionGen 1.0",
         flood_sleep_threshold=60,
         connection_retries=3,
-        retry_delay=5,
-        socket_keepalive=True,
-        ping_interval=30.0,
-        timeout=10.0
+        retry_delay=5
     )
     
     try:
