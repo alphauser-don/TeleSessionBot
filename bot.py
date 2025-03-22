@@ -297,7 +297,11 @@ async def post_init(application):
         logger.error(f"Startup notification failed: {e}")
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+    app = ApplicationBuilder() \
+        .token(TOKEN) \
+        .post_init(post_init) \
+        .post_shutdown(lambda _: save_state()) \
+        .build()
     
     gen_conv = ConversationHandler(
         entry_points=[CommandHandler('genstring', genstring)],
@@ -332,7 +336,6 @@ def main():
     ])
     
     app.add_error_handler(error_handler)
-    app.post_shutdown(save_state)
     
     logger.info("Bot starting...")
     app.run_polling()
