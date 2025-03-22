@@ -9,7 +9,12 @@ A secure Telegram bot for generating and managing Telethon string sessions.
 - Server statistics
 - Maintenance mode
 - Error logging
+  
+## Commands
+- **Users**: `/start`, `/genstring`, `/revoke`, `/resend`
+- **Owner**: `/stats`, `/ping`, `/usage`, `/verify`, `/maintenance`
 
+  
 ## Deployment
 1. Clone repo:
 ```bash
