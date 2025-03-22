@@ -17,15 +17,18 @@ git clone https://github.com/yourusername/TeleSessionBot.git
 cd TeleSessionBot
 
 2 - Install dependencies:
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
 Configure environment:
+```bash
 cp .env.sample .env
 nano .env
 
 Production deployment:
+```bash
 sudo cp deployment/stringbot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable stringbot
