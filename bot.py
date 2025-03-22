@@ -1,6 +1,7 @@
 import logging
 import json
 import time
+import asyncio
 import psutil
 from datetime import datetime
 from telegram import Update
@@ -160,21 +161,31 @@ async def phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_dc_migration(new_dc, context):
     client = context.user_data['client']
-    await client.disconnect()
+    if client.is_connected():
+        await client.disconnect()
     
     client.session.set_dc(new_dc, 
         client.session.get_dc(new_dc).ip_address,
         client.session.get_dc(new_dc).port
     )
     
-    await client.connect()
-    logger.info(f"Migrated to DC {new_dc}")
+    retries = 0
+    while retries < 3:
+        try:
+            await client.connect()
+            logger.info(f"Migrated to DC {new_dc}")
+            context.user_data['original_dc'] = {
+                'dc_id': new_dc,
+                'server_address': client.session.server_address,
+                'port': client.session.port
+            }
+            return
+        except Exception as e:
+            logger.warning(f"DC migration retry {retries+1}/3 failed: {e}")
+            retries += 1
+            await asyncio.sleep(1)
     
-    context.user_data['original_dc'] = {
-        'dc_id': new_dc,
-        'server_address': client.session.server_address,
-        'port': client.session.port
-    }
+    raise ConnectionError("Failed to migrate DC after 3 attempts")
 
 async def otp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['otp'] = update.message.text
@@ -186,14 +197,24 @@ async def otp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if current_dc != original_dc:
             logger.info(f"DC mismatch detected ({current_dc} vs {original_dc})")
+            if client.is_connected():
+                await client.disconnect()
             await client._switch_dc(original_dc)
-            await client.connect()
+            
+            retries = 0
+            while retries < 3:
+                try:
+                    await client.connect()
+                    break
+                except Exception as e:
+                    logger.warning(f"Connection retry {retries+1}/3 failed: {e}")
+                    retries += 1
+                    await asyncio.sleep(1)
 
         result = await client.sign_in(
             phone=context.user_data['phone'],
             code=context.user_data['otp'],
-            phone_code_hash=context.user_data['phone_code_hash'],
-            max_attempts=3
+            phone_code_hash=context.user_data['phone_code_hash']
         )
         
         if isinstance(result, User):
@@ -224,7 +245,7 @@ async def otp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Sign-in error: {e}")
-        await update.message.reply_text("❌ Critical error! Contact @rishabh_zz")
+        await update.message.reply_text("❌ Connection error. Please try again or contact @rishabh_zz")
         return ConversationHandler.END
 
 async def resend(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,6 +258,8 @@ async def resend(update: Update, context: ContextTypes.DEFAULT_TYPE):
         original_dc = context.user_data['original_dc']['dc_id']
         
         if client.session.dc_id != original_dc:
+            if client.is_connected():
+                await client.disconnect()
             await client._switch_dc(original_dc)
             await client.connect()
         
